@@ -120,8 +120,10 @@ class HRBranch(nn.Module):
     """ High Resolution Branch of MODNet
     """
 
-    def __init__(self, hr_channels, enc_channels):
+    def __init__(self, hr_channels, enc_channels, device):
         super(HRBranch, self).__init__()
+        
+        self.device = device
 
         self.tohr_enc2x = Conv2dIBNormRelu(enc_channels[0], hr_channels, 1, stride=1, padding=0)
         self.conv_enc2x = Conv2dIBNormRelu(hr_channels + 3, hr_channels, 3, stride=2, padding=1)
@@ -151,27 +153,27 @@ class HRBranch(nn.Module):
         #img2x = F.interpolate(img, scale_factor=1, mode='bilinear', align_corners=False)
         #img4x = F.interpolate(img, scale_factor=1/4, mode='bilinear', align_corners=False)
 
-        enc2x = self.tohr_enc2x.cuda()(enc2x)
+        enc2x = self.tohr_enc2x.to(self.device)(enc2x)
         img2x = F.interpolate(img, scale_factor=1/2, mode='bilinear', align_corners=False)
-        hr4x = self.conv_enc2x.cuda()(torch.cat((img2x, enc2x), dim=1))
+        hr4x = self.conv_enc2x.to(self.device)(torch.cat((img2x, enc2x), dim=1))
 
-        enc4x = self.tohr_enc4x.cuda()(enc4x)
-        hr4x = self.conv_enc4x.cuda()(torch.cat((hr4x, enc4x), dim=1))
+        enc4x = self.tohr_enc4x.to(self.device)(enc4x)
+        hr4x = self.conv_enc4x.to(self.device)(torch.cat((hr4x, enc4x), dim=1))
 
         lr4x = F.interpolate(lr8x, scale_factor=1, mode='bilinear', align_corners=False)
         img4x = F.interpolate(img, scale_factor=1/4, mode='bilinear', align_corners=False)
         
         #print("---", hr4x.shape, lr4x.shape, img4x.shape)
         
-        hr4x = self.conv_hr4x.cuda()(torch.cat((hr4x, lr4x, img4x), dim=1))
+        hr4x = self.conv_hr4x.to(self.device)(torch.cat((hr4x, lr4x, img4x), dim=1))
 
         hr2x = F.interpolate(hr4x, scale_factor=2, mode='bilinear', align_corners=False)
-        hr2x = self.conv_hr2x.cuda()(torch.cat((hr2x, enc2x), dim=1))
+        hr2x = self.conv_hr2x.to(self.device)(torch.cat((hr2x, enc2x), dim=1))
 
         pred_detail = None
         if not inference:
             hr = F.interpolate(hr2x, scale_factor=2, mode='bilinear', align_corners=False)
-            hr = self.conv_hr.cuda()(torch.cat((hr, img), dim=1))
+            hr = self.conv_hr.to(self.device)(torch.cat((hr, img), dim=1))
             pred_detail = torch.sigmoid(hr)
 
         return pred_detail, hr2x
@@ -180,8 +182,11 @@ class FusionBranch(nn.Module):
     """ Fusion Branch of MODNet
     """
 
-    def __init__(self, hr_channels, enc_channels):
+    def __init__(self, hr_channels, enc_channels, device):
         super(FusionBranch, self).__init__()
+        
+        self.device = device
+        
         self.conv_lr4x = Conv2dIBNormRelu(enc_channels[2], hr_channels, 5, stride=1, padding=2)
         
         self.conv_f2x = Conv2dIBNormRelu(2 * hr_channels, hr_channels, 3, stride=1, padding=1)
@@ -192,12 +197,12 @@ class FusionBranch(nn.Module):
 
     def forward(self, img, lr8x, hr2x):
         lr4x = F.interpolate(lr8x, scale_factor=2, mode='bilinear', align_corners=False)
-        lr4x = self.conv_lr4x.cuda()(lr4x)
+        lr4x = self.conv_lr4x.to(self.device)(lr4x)
         lr2x = F.interpolate(lr4x, scale_factor=1, mode='bilinear', align_corners=False)
 
-        f2x = self.conv_f2x.cuda()(torch.cat((lr2x, hr2x), dim=1))
+        f2x = self.conv_f2x.to(self.device)(torch.cat((lr2x, hr2x), dim=1))
         f = F.interpolate(f2x, scale_factor=2, mode='bilinear', align_corners=False)
-        f = self.conv_f.cuda()(torch.cat((f, img), dim=1))
+        f = self.conv_f.to(self.device)(torch.cat((f, img), dim=1))
         #pred_matte = torch.sigmoid(f)
 
         #return pred_matte
@@ -212,9 +217,11 @@ class CustomMODNet(nn.Module):
     """ Architecture of MODNet
     """
 
-    def __init__(self, in_channels=3, hr_channels=32, backbone_arch='mobilenetv2', backbone_pretrained=True):
+    def __init__(self, in_channels=3, hr_channels=32, backbone_arch='mobilenetv2', backbone_pretrained=True, device='cuda'):
         super(CustomMODNet, self).__init__()
 
+        self.device = device
+        
         self.in_channels = in_channels
         self.hr_channels = hr_channels
         self.backbone_arch = backbone_arch 
@@ -223,8 +230,8 @@ class CustomMODNet(nn.Module):
         self.backbone = SUPPORTED_BACKBONES[self.backbone_arch](self.in_channels)
 
         self.lr_branch = LRBranch(self.backbone)
-        self.hr_branch = HRBranch(self.hr_channels, self.backbone.enc_channels)
-        self.f_branch = FusionBranch(self.hr_channels, self.backbone.enc_channels)
+        self.hr_branch = HRBranch(self.hr_channels, self.backbone.enc_channels, device=self.device)
+        self.f_branch = FusionBranch(self.hr_channels, self.backbone.enc_channels, device=self.device)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
